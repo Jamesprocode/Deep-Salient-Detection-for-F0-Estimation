@@ -26,6 +26,7 @@ from torchvision.models import resnet18
 from scipy.io import wavfile
 import scipy.signal as sig
 import pandas as pd
+from tqdm import tqdm
 
 # Import mir_eval for melody evaluation
 try:
@@ -348,7 +349,7 @@ def evaluate_autocorrelation(audio_path: Path, gt_times, gt_freqs,
     return scores
 
 
-def evaluate_deep_model(model, audio_path: Path, gt_times, gt_freqs, device):
+def evaluate_deep_model(model, audio_path: Path, gt_times, gt_freqs, device, threshold=0.5):
     """Evaluate a deep learning model."""
     # Load and preprocess audio
     y, sr = librosa.load(audio_path, sr=SR, mono=True)
@@ -368,7 +369,7 @@ def evaluate_deep_model(model, audio_path: Path, gt_times, gt_freqs, device):
         salience = torch.sigmoid(logits).cpu().numpy()[0]  # (F, T)
 
     # Extract F0 contour
-    f0_contour = salience_to_f0_contour(salience, threshold=0.5)
+    f0_contour = salience_to_f0_contour(salience, threshold=threshold)
 
     # Create time array (based on hop_length)
     est_times = librosa.frames_to_time(
@@ -400,35 +401,45 @@ def main():
     ANNOT_DIR = DATA_DIR / "Annotations" / "F0"
     MODEL_DIR = Path("model")
 
-    # Model configurations
+    # Model configurations with appropriate thresholds
+    # Based on debug_models.py analysis:
+    # - SimpleNet models: threshold ~0.25 (max salience ~0.4)
+    # - ResNet models: threshold ~0.05 (max salience ~0.2)
     MODELS = {
         "AutoCorrelation": {
             "type": "autocorrelation",
             "path": None,
+            "threshold": 0.25,
         },
         "SimpleNet_BCE": {
             "type": "simple",
             "path": MODEL_DIR / "simpleNet_with_BCE(epoch30_lr1e-3_batchSize8))" / "best_model.pth",
+            "threshold": 0.25,
         },
         "SimpleNet_BCE+MSE": {
             "type": "simple",
             "path": MODEL_DIR / "simpleNet_with_bce_mseloss" / "best_model_hybrid.pth",
+            "threshold": 0.25,
         },
         "ResNet_BCE_Frozen": {
             "type": "resnet",
             "path": MODEL_DIR / "Resnet_with_Bce_freezen(epoch30_lr1e-4_batchSize8))" / "best_model_resnet_bce.pth",
+            "threshold": 0.05,
         },
         "ResNet_BCE_Unfrozen": {
             "type": "resnet",
             "path": MODEL_DIR / "Resnet_with_BCE_no_freezen(epoch30_lr1e-4_batchSize8))" / "best_model_resnet_bce.pth",
+            "threshold": 0.05,
         },
         "ResNet_BCE+MSE_Frozen": {
             "type": "resnet",
-            "path": MODEL_DIR / "Resnet_with_BCE+MSE_Freezen(epoch30_lr1e-4_bs8	)" / "best_model_resnet_hybrid.pth",
+            "path": MODEL_DIR / "Resnet_with_BCE+MSE_Freezen(epoch30_lr1e-4_bs8）)" / "best_model_resnet_hybrid.pth",
+            "threshold": 0.05,
         },
         "ResNet_BCE+MSE_Unfrozen": {
             "type": "resnet",
             "path": MODEL_DIR / "Resnet_with_BCE+mse_no_freezen(epoch30_lr1e-4_batchSize8))" / "best_model_resnet_hybrid.pth",
+            "threshold": 0.05,
         },
     }
 
@@ -464,7 +475,7 @@ def main():
     all_results = {model_name: [] for model_name in MODELS.keys()}
 
     # Evaluate each file
-    for audio_path in audio_files:
+    for audio_path in tqdm(audio_files, desc="Evaluating files"):
         track_id = audio_path.stem  # e.g., "vocadito_1"
         annot_path = ANNOT_DIR / f"{track_id}_f0.csv"
 
@@ -472,7 +483,7 @@ def main():
             print(f"� Skipping {track_id}: annotation not found")
             continue
 
-        print(f"Evaluating: {track_id}")
+        tqdm.write(f"Evaluating: {track_id}")
 
         # Load ground truth
         gt_times, gt_freqs = load_ground_truth(annot_path)
@@ -484,11 +495,12 @@ def main():
                     scores = evaluate_autocorrelation(
                         audio_path, gt_times, gt_freqs,
                         frame_size=2048, hop_ratio=0.5,
-                        minfreq=50, maxfreq=800, threshold=0.25
+                        minfreq=50, maxfreq=800, threshold=config["threshold"]
                     )
                 else:
                     model = loaded_models[model_name]
-                    scores = evaluate_deep_model(model, audio_path, gt_times, gt_freqs, device)
+                    threshold = config.get("threshold", 0.5)
+                    scores = evaluate_deep_model(model, audio_path, gt_times, gt_freqs, device, threshold=threshold)
 
                 all_results[model_name].append(scores)
                 print(f"  {model_name}: VR={scores['Voicing Recall']:.3f}, VFA={scores['Voicing False Alarm']:.3f}, RPA={scores['Raw Pitch Accuracy']:.3f}, RCA={scores['Raw Chroma Accuracy']:.3f}, OA={scores['Overall Accuracy']:.3f}")
@@ -496,11 +508,10 @@ def main():
             except Exception as e:
                 print(f"   {model_name}: Error - {e}")
 
-        print()
 
     # Aggregate results
     print("\n" + "="*80)
-    print("FINAL RESULTS (Average across all test files)")
+    print("FINAL RESULTS (Mean ± Std across all test files)")
     print("="*80)
 
     metric_names = ['Voicing Recall', 'Voicing False Alarm', 'Raw Pitch Accuracy',
@@ -511,34 +522,24 @@ def main():
         if len(all_results[model_name]) == 0:
             continue
 
-        # Average each metric
+        # Calculate mean and std for each metric
         avg_scores = {}
+        std_scores = {}
         for metric in metric_names:
             values = [scores[metric] for scores in all_results[model_name]]
             avg_scores[metric] = np.mean(values)
+            std_scores[metric] = np.std(values)
 
-        summary_results[model_name] = avg_scores
+        summary_results[model_name] = {
+            'mean': avg_scores,
+            'std': std_scores
+        }
 
         print(f"\n{model_name}:")
-        for metric, value in avg_scores.items():
-            print(f"  {metric:25s}: {value:.4f}")
-
-    # Save results to CSV
-    output_path = Path("evaluation_results.csv")
-    with open(output_path, 'w', newline='') as f:
-        writer = csv.writer(f)
-
-        # Header
-        header = ['Model'] + metric_names
-        writer.writerow(header)
-
-        # Data
-        for model_name, avg_scores in summary_results.items():
-            row = [model_name] + [avg_scores[metric] for metric in metric_names]
-            writer.writerow(row)
-
-    print(f"\n Results saved to {output_path}")
-    print("="*80)
+        for metric in metric_names:
+            mean_val = avg_scores[metric]
+            std_val = std_scores[metric]
+            print(f"  {metric:25s}: {mean_val:.4f} ± {std_val:.4f}")
 
 
 if __name__ == "__main__":
