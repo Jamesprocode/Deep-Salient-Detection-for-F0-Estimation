@@ -395,10 +395,10 @@ def load_ground_truth(annotation_path: Path):
 
 def main():
     # Configuration
-    DATA_DIR = Path("/Users/jameswang/workspace/Audio Content Analysis/Deep Salient Detection for F0 Estimation/Data 2/Evaluation/vocadito")
+    DATA_DIR = Path("Data 2/Evaluation/vocadito")
     AUDIO_DIR = DATA_DIR / "Audio"
     ANNOT_DIR = DATA_DIR / "Annotations" / "F0"
-    MODEL_DIR = Path("/Users/jameswang/workspace/Audio Content Analysis/Deep Salient Detection for F0 Estimation/model")
+    MODEL_DIR = Path("model")
 
     # Model configurations
     MODELS = {
@@ -469,7 +469,7 @@ def main():
         annot_path = ANNOT_DIR / f"{track_id}_f0.csv"
 
         if not annot_path.exists():
-            print(f"  Skipping {track_id}: annotation not found")
+            print(f"ï¿½ Skipping {track_id}: annotation not found")
             continue
 
         print(f"Evaluating: {track_id}")
