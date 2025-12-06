@@ -1,0 +1,9 @@
+# Requirements for F0 Evaluation Script
+numpy
+scipy
+torch
+torchvision
+librosa
+pandas
+mir_eval
+matplotlib
